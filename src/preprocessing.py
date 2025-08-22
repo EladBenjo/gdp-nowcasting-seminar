@@ -179,7 +179,6 @@ def print_date_range(df, df_name="DataFrame"):
 
     print("[WARNING] No datetime information found.")
 
-import pandas as pd
 
 def merge_series_freq(dfs: dict, date_column: str = 'Date') -> pd.DataFrame:
     """
