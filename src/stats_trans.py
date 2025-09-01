@@ -131,3 +131,21 @@ def apply_transform_inplace(
 
     # In-place; explicit None for clarity
     return None
+
+
+def fit_zscore(train_df: pd.DataFrame):
+    """
+    Fit Z-score parameters on training data (mean, std per column).
+    NaN values are ignored in mean/std calculation.
+    """
+    mu = train_df.mean(skipna=True)
+    sigma = train_df.std(skipna=True)
+    return mu, sigma
+
+
+def transform_zscore(df: pd.DataFrame, mu: pd.Series, sigma: pd.Series):
+    """
+    Apply Z-score transform using pre-computed train statistics.
+    """
+    return (df - mu) / sigma
+    
