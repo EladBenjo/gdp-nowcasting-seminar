@@ -3,32 +3,32 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from typing import Dict, Tuple, List, Any
+import os
+import pickle
+
 
 def fit_dfm_grid(
     X_train: pd.DataFrame,
     k_factors_grid: List[int] = (1, 2, 3),
     factor_order_grid: List[int] = (1, 2),
-    error_cov_grid: List[str] = ("diagonal",),  # try "unstructured" only if N is small enough
+    error_cov_grid: List[str] = ("diagonal",),
     method: str = "em",
     disp: bool = False,
+    save_dir: [str] = None,
 ) -> Tuple[pd.DataFrame, Dict[Tuple[int, int, str], Any]]:
-    """
-    Fit a grid of DynamicFactor models and collect AIC/BIC/LL.
-    Returns:
-      - results_table: DataFrame with one row per spec (sorted by BIC then AIC)
-      - models: dict mapping (k_factors, factor_order, error_cov_type) -> fitted results object
-    Notes:
-      * X_train should already be stationary and standardized (Z-score on train).
-      * NaNs are allowed; the Kalman filter handles ragged-edge.
-    """
+    import os
+    import pickle
+
     rows = []
     models: Dict[Tuple[int, int, str], Any] = {}
 
-    # Ensure index is monotonic increasing (required by statespace)
     X_train = X_train.sort_index()
+
+    print("Starting grid search...")
 
     for k, p, cov in itertools.product(k_factors_grid, factor_order_grid, error_cov_grid):
         key = (k, p, cov)
+        print(f"--> Fitting model: k_factors={k}, factor_order={p}, error_cov_type={cov}")
         try:
             mod = sm.tsa.DynamicFactor(
                 X_train,
@@ -36,8 +36,19 @@ def fit_dfm_grid(
                 factor_order=p,
                 error_cov_type=cov
             )
-            res = mod.fit(method=method, disp=disp)
+            res = mod.fit(method=method, maxiter=100, disp=disp)
             models[key] = res
+
+            print(f"    ✅ Fit successful. LLF={res.llf:.2f}, BIC={res.bic:.2f}")
+
+            # Save the fitted model as pickle
+            if save_dir is not None:
+                os.makedirs(save_dir, exist_ok=True)
+                filename = f"dfm_k{k}_p{p}_cov{cov}.pkl"
+                filepath = os.path.join(save_dir, filename)
+                with open(filepath, "wb") as f:
+                    pickle.dump(res, f)
+                print(f"    📦 Saved model to: {filepath}")
 
             rows.append({
                 "k_factors": k,
@@ -51,7 +62,7 @@ def fit_dfm_grid(
                 "iterations": getattr(res, "mle_retvals", {}).get("iterations", np.nan),
             })
         except Exception as e:
-            # Capture failures (common if spec is too ambitious)
+            print(f"    ❌ Fit failed: {str(e)}")
             rows.append({
                 "k_factors": k,
                 "factor_order": p,
@@ -65,6 +76,7 @@ def fit_dfm_grid(
                 "error": str(e),
             })
 
+    print("✅ Grid search completed.")
     results_table = pd.DataFrame(rows)
     results_table = results_table.sort_values(["bic", "aic"], ascending=[True, True]).reset_index(drop=True)
     return results_table, models
