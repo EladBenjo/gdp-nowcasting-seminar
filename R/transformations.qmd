@@ -1,0 +1,969 @@
+---
+title: "transformations.qmd_01"
+format: html
+editor: visual
+author: Elad Benjo
+---
+
+# Intro
+
+this notebooks describes the suggested transformations pipeline:
+
+RAW -\> Price Adjustments (FX and CPI) -\> Seasonality -\> Final Transformations
+
+# Utilities
+
+## Packages
+
+```{r}
+# Load every session
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(zoo)
+library(readxl)
+library(purrr)
+library(tseries)
+library(forecast)
+library(seasonal)
+library(lubridate)
+```
+
+## Scripts
+
+### Save Tables
+
+```{r}
+save_list_to_excel <- function(lst, file_path = "output.xlsx") {
+  # lst: a named list of data.frames
+  # file_path: output Excel file path
+  
+  # Require openxlsx
+  if (!requireNamespace("openxlsx", quietly = TRUE)) {
+    stop("Package 'openxlsx' is required but not installed.")
+  }
+  
+  # Create workbook
+  wb <- openxlsx::createWorkbook()
+  
+  # Loop through list elements and add worksheets
+  for (sheet_name in names(lst)) {
+    
+    # Add worksheet
+    openxlsx::addWorksheet(wb, sheet_name)
+    
+    # Write the data frame
+    openxlsx::writeData(wb,
+                        sheet = sheet_name,
+                        x = lst[[sheet_name]])
+  }
+  
+  # Save workbook
+  openxlsx::saveWorkbook(wb,
+                         file = file_path,
+                         overwrite = TRUE)
+  
+  message("Saved Excel file: ", file_path)
+}
+
+```
+
+# Stationary:
+
+in this notebook we will take our daily, monthly and quarterly tables, examine the stationarity and seasonality of each series, apply the right transformations and re-evaluate.
+
+## Import data sets:
+
+```{r}
+path <- "C:/Users/eladb/OneDrive/Desktop/University/2025 B/Nowcasting/Seminar/data/raw/nowcasting_data_raw.xlsx"
+```
+
+```{r}
+sheets <- excel_sheets(path)
+```
+
+```{r}
+blocks_raw <- sheets %>% 
+  set_names() %>% 
+  map(~ read_excel(path, sheet = .x))
+
+blocks_real <- sheets %>% 
+  set_names() %>% 
+  map(~ read_excel(path, sheet = .x))
+```
+
+```{r}
+blocks_raw <- map(blocks_raw, ~ {
+  df <- .x
+  df$Date <- as.Date(df$Date)
+  df
+})
+
+blocks_real <- map(blocks_raw, ~ {
+  df <- .x
+  df$Date <- as.Date(df$Date)
+  df
+})
+```
+
+## Price Adjustment
+
+in this first step we are addressing variables that are in nominal form or in foreign currency. generally all tax data is adjusted with CPI, OIL and FX reserves are treated both with CPI and USD/ILS.
+
+### Create Function
+
+```{r}
+adjust_block_for_cpi <- function(block_df, cpi_df, cols = "all") {
+  # join by date
+  df <- block_df %>%
+    dplyr::left_join(cpi_df %>% dplyr::select(Date, CPI), by = "Date")
+  
+  # CPI test for NA's
+  if (any(is.na(df$CPI))) {
+    warning("There are NA values in CPI after merging. Check date alignment.")
+  }
+  
+  # select cols
+  if (identical(cols, "all")) {
+    cols_to_adjust <- setdiff(names(df), c("Date", "CPI"))
+  } else {
+    cols_to_adjust <- cols
+  }
+  
+  # adjust for real values
+  for (col in cols_to_adjust) {
+    # skip non-exisitng cols
+    if (!col %in% names(df)) {
+      warning(paste("Column", col, "not found in block. Skipping."))
+      next
+    }
+    
+    # override with real val
+    df[[col]] <- df[[col]] / (df$CPI / 100)
+  }
+  
+    # remove CPI
+    df <- df %>% dplyr::select(-CPI)
+  
+  return(df)
+}
+
+```
+
+### Apply
+
+bellow I'm using the function on all TAX blocks, as well as the taxes in Real estate block, then last Oil and FX reserves.
+
+```{r}
+blocks_real$personal_labor_income_taxes <-
+  adjust_block_for_cpi(blocks_raw$personal_labor_income_taxes,
+                       blocks_raw$adjusters)
+```
+
+```{r}
+blocks_real$corporate_business_tax <-
+  adjust_block_for_cpi(blocks_raw$corporate_business_tax,
+                       blocks_raw$adjusters)
+```
+
+```{r}
+blocks_real$consumption_tax <-
+  adjust_block_for_cpi(blocks_raw$consumption_tax,
+                       blocks_raw$adjusters)
+```
+
+```{r}
+blocks_real$import_trade_tax <-
+  adjust_block_for_cpi(blocks_raw$import_trade_tax,
+                       blocks_raw$adjusters)
+```
+
+```{r}
+blocks_real$real_estate <-
+  adjust_block_for_cpi(blocks_raw$real_estate,
+                       blocks_raw$adjusters,
+                       cols = c("Real estate taxation",
+                                "Property tax",
+                                "praise tax",
+                                "Real estate purchase tax",
+                                "praise tax returns",
+                                "purchase returns"))
+```
+
+adjusting oil to USD/ILS and CPI
+
+```{r}
+blocks_real$real_activity$Oil <- blocks_raw$real_activity$Oil * blocks_raw$FX_liqudity$Dollar
+```
+
+```{r}
+blocks_real$real_activity <-
+  adjust_block_for_cpi(blocks_real$real_activity,
+                       blocks_real$adjusters,
+                       cols = "Oil")
+```
+
+```{r}
+blocks_real$FX_liqudity$`Foreign exchange reserves (millions of dollars)` <- blocks_raw$FX_liqudity$`Foreign exchange reserves (millions of dollars)` * blocks_raw$FX_liqudity$Dollar
+```
+
+```{r}
+blocks_real$FX_liqudity <-
+  adjust_block_for_cpi(blocks_real$FX_liqudity,
+                       blocks_real$adjusters,
+                       cols = "Foreign exchange reserves (millions of dollars)")
+```
+
+quick peek and validation
+
+```{r}
+head(blocks_real$FX_liqudity$`Foreign exchange reserves (millions of dollars)`)
+```
+
+```{r}
+head(blocks_raw$FX_liqudity$`Foreign exchange reserves (millions of dollars)`)
+```
+
+### Save Results
+
+since I didn't automate this yet, manually tracking meta data:
+
+1.  all taxes blocks adjusted by CPI (refer to specifics in Real Estate block)
+2.  Oil and FX reserves are adjusted USD and CPI
+
+```{r}
+save_list_to_excel(blocks_real, "blocks_real.xlsx")
+```
+
+## Seasonality
+
+in this part we are using MoFi script to treat Israeli seasonality in the data
+
+### Create Function
+
+load files
+
+```{r}
+td <- read_csv("C:/Users/eladb/OneDrive/Desktop/University/2025 B/Nowcasting/Seasonality by Yotam/SA_CODE/Data/td_var.csv")
+td_ts <- ts(
+  td[, -1],
+  start = c(year(min(td$date)), month(min(td$date))),
+  frequency = 12
+)
+
+preadj <- read_excel("C:/Users/eladb/OneDrive/Desktop/University/2025 B/Nowcasting/Seasonality by Yotam/SA_CODE/Data/hol_preadj.xlsx") %>%
+  mutate(date = as.Date(date))
+
+hag_ts <- ts(
+  preadj[, -1],
+  start = c(year(min(preadj$date)), month(min(preadj$date))),
+  frequency = 12
+)
+```
+
+```{r}
+seasonal_adjust_block <- function(block_df,
+                                  columns = "all",
+                                  hag_ts,
+                                  td_ts,
+                                  x11 = TRUE,
+                                  outlier_types = "ao") {
+  
+  # Ensure 'Date' column exists
+  if (!"Date" %in% names(block_df)) {
+    stop("The block must contain a 'Date' column.")
+  }
+  
+  # Select variables to process
+  if (identical(columns, "all")) {
+    vars <- setdiff(names(block_df), "Date")
+  } else {
+    vars <- columns
+  }
+  
+  # Output containers
+  info_list <- list()
+  df_out <- block_df
+  
+  # Loop through variables
+  for (v in vars) {
+    message("Running SA on variable: ", v)
+    
+    x <- df_out[[v]]
+    
+    # Skip if all NA
+    if (all(is.na(x))) {
+      info_list[[v]] <- data.frame(
+        variable = v,
+        status = "Skipped - all NA",
+        transform = NA,
+        arima = NA,
+        outliers = NA,
+        stringsAsFactors = FALSE
+      )
+      next
+    }
+    
+    # Identify leading NA region
+    first_non_na <- min(which(!is.na(x)))
+    last_non_na  <- max(which(!is.na(x)))
+    segment <- x[first_non_na:last_non_na]
+    
+    # Skip if NA inside the segment (not allowed in X-13)
+    if (any(is.na(segment))) {
+      info_list[[v]] <- data.frame(
+        variable = v,
+        status = "Skipped - NA inside the series",
+        transform = NA,
+        arima = NA,
+        outliers = NA,
+        stringsAsFactors = FALSE
+      )
+      next
+    }
+    
+    # Create TS object using full date range
+    y <- ts(
+      segment,
+      start = c(year(df_out$Date[first_non_na]),
+                month(df_out$Date[first_non_na])),
+      frequency = 12
+    )
+    
+    # Run X-13
+    fit <- tryCatch({
+      if (x11) {
+        seas(
+          y,
+          x11 = "",
+          outlier.types = outlier_types,
+          transform.function = "auto",
+          xreg = cbind(hag_ts, td_ts),
+          regression.usertype = rep("holiday", ncol(hag_ts))
+        )
+      } else {
+        seas(
+          y,
+          outlier.types = outlier_types,
+          transform.function = "auto",
+          xreg = cbind(hag_ts, td_ts),
+          regression.usertype = rep("holiday", ncol(hag_ts))
+        )
+      }
+    }, error = function(e) {
+      info_list[[v]] <<- data.frame(
+        variable = v,
+        status = paste("SA failed:", e$message),
+        transform = NA,
+        arima = NA,
+        outliers = NA,
+        stringsAsFactors = FALSE
+      )
+      return(NULL)
+    })
+    
+    if (is.null(fit)) next
+    
+    # Extract metadata
+    trans_used <- tryCatch(as.character(fit$series$transfunc)[1], error = function(e) NA)
+    arima_used <- tryCatch(paste(as.character(fit$est$arima), collapse = "; "), error = function(e) NA)
+    outliers_used <- tryCatch(paste(as.character(fit$outlier$Type), collapse = ", "), error = function(e) NA)
+    
+    info_list[[v]] <- data.frame(
+      variable = v,
+      status = "OK",
+      transform = trans_used,
+      arima = arima_used,
+      outliers = outliers_used,
+      stringsAsFactors = FALSE
+    )
+    
+    # --- Corrected assignment with leading NA preserved ---
+    adj <- as.numeric(predict(fit))
+    
+    # Fill inside the original vector
+    result_vec <- x
+    result_vec[first_non_na:last_non_na] <- adj
+    
+    df_out[[v]] <- result_vec
+  }
+  
+  return(list(
+    data = df_out,
+    info = dplyr::bind_rows(info_list)
+  ))
+}
+
+```
+
+### Apply
+
+duplicate "blocks_real" into a new variable
+
+```{r}
+blocks_sa <- blocks_real
+```
+
+create a list to save transformation meta-data into
+
+```{r}
+sa_info <- list()
+```
+
+in this chunk below you run the SA script, results are then stored in "out" and written to both "blocks_sa" and meta data. adjust with your desired block and save path.
+
+```{r}
+out <- seasonal_adjust_block(
+    blocks_real$real_estate, # choose your block
+    columns = c("Real estate taxation",
+                "Property tax",
+                "praise tax",
+                "Real estate purchase tax",
+                "praise tax returns",
+                "purchase returns"),
+    hag_ts = hag_ts,
+    td_ts = td_ts
+)
+
+blocks_sa$real_estate <- out$data # override with the SA data
+sa_info$real_estate   <- out$info # save trans meta-data
+
+```
+
+### Save Results
+
+save seasonal transformation meta-data
+
+```{r}
+write_sa_info <- function(sa_info, file_path = "sa_info.xlsx") {
+  wb <- createWorkbook()
+  
+  for (bn in names(sa_info)) {
+    addWorksheet(wb, bn)
+    writeData(wb, bn, sa_info[[bn]])
+  }
+  
+  saveWorkbook(wb, file = file_path, overwrite = TRUE)
+}
+```
+
+```{r}
+write_sa_info(sa_info, "SA_results_01.xlsx")
+```
+
+```{r}
+save_list_to_excel(blocks_sa, "blocks_sa_01.xlsx")
+```
+
+## Transformations
+
+### Tests
+
+kpss and adf tests for stationary series
+
+#### Create Function
+
+```{r}
+test_transform <- function(x, freq = 12, alpha = 0.05) {
+  
+  x_clean <- na.omit(x)
+  if (length(x_clean) < 24) return("too_short")
+  
+  # 1. Seasonality check with STL
+  seas_strength <- NA
+  has_seasonality <- FALSE
+  if (freq > 1 && length(x_clean) > freq * 2) {
+    stl_obj <- tryCatch(stl(ts(x_clean, frequency = freq), s.window = "periodic"), error = function(e) NULL)
+    if (!is.null(stl_obj)) {
+      seas <- stl_obj$time.series[, "seasonal"]
+      resid <- stl_obj$time.series[, "remainder"]
+      seas_strength <- max(0, 1 - var(resid) / var(seas + resid))
+      has_seasonality <- seas_strength > 0.3
+    }
+  }
+  
+  # 2. ADF test
+  adf_p <- tryCatch(adf.test(x_clean)$p.value, error = function(e) NA)
+  
+  # 3. KPSS test
+  kpss_p <- tryCatch(kpss.test(x_clean)$p.value, error = function(e) NA)
+  
+  # 4. LOG possible?
+  positive_only <- all(x_clean > 0)
+  
+  # 5. Logic
+  adf_stationary <- !is.na(adf_p)  && adf_p < alpha
+  kpss_stationary <- !is.na(kpss_p) && kpss_p > alpha
+  
+  # Base decision
+  if (adf_stationary && kpss_stationary) {
+    base <- "none"
+  } else if (!adf_stationary && !kpss_stationary) {
+    base <- "diff"
+  } else if (adf_stationary && !kpss_stationary) {
+    base <- "detrend"
+  } else {
+    base <- "diff"
+  }
+  
+  # Prefer LOGDIFF if possible
+  if (base == "diff" && positive_only) base <- "logdiff"
+  
+  # Add seasonality
+  if (has_seasonality) {
+    if (base == "none") {
+      base <- "seasonal_diff"
+    } else {
+      base <- paste0(base, "+seasonal_diff")
+    }
+  }
+  
+  return(base)
+}
+```
+
+#### Apply
+
+apply on each block and save the results in a list like variable, later we will apply transformations with the recommended ones we got there.
+
+```{r}
+block <- blocks_sa$personal_labor_income_taxes
+trans_01 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$corporate_business_tax
+trans_02 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$consumption_tax
+trans_03 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$import_trade_tax
+trans_04 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$real_estate
+trans_05 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$real_activity
+trans_06 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$labor
+trans_07 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$capital_markets
+trans_08 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+```{r}
+block <- blocks_sa$FX_liqudity
+trans_09 <- sapply(block %>% dplyr::select(-Date), test_transform)
+```
+
+### Transform
+
+after testing for required transformation for each variable, in this section we can go ahead and start applying, test again at the end. note that for some variables that "detrend" was recommended I ended up applying "diff" or "logdiff" instead for cases where detrend didn't work, final transformations is stored in the report.
+
+#### Create Function
+
+```{r}
+transform_block <- function(block_df, codes_vector, freq = 12) {
+  
+  block_df <- as.data.frame(block_df)
+  
+  if (!"Date" %in% names(block_df)) stop("Date column missing.")
+  
+  vars <- setdiff(names(block_df), "Date")
+  if (length(vars) != length(codes_vector)) stop("codes length mismatch.")
+  
+  out_df <- block_df
+  info_list <- list()
+  
+  for (i in seq_along(vars)) {
+    
+    varname <- vars[i]
+    code <- codes_vector[i]
+    x <- out_df[[varname]]
+    n <- length(x)
+    
+    # always initialize full-length result
+    result <- rep(NA, n)
+    
+    transformed <- tryCatch({
+      
+      if (code == 0) {
+        result <- x
+        result
+        
+      } else if (code == 1) {
+        result <- log(x)
+        result
+        
+      } else if (code == 2) {
+        result[2:n] <- diff(x)
+        result
+        
+      } else if (code == 3) {
+        lx <- log(x)
+        result[2:n] <- diff(lx)
+        result
+        
+      } else if (code == 4) {
+        if (n > freq) result[(freq+1):n] <- x[(freq+1):n] - x[1:(n-freq)]
+        result
+        
+      } else if (code == 5) {
+        if (n > freq) {
+          sd <- x[(freq+1):n] - x[1:(n-freq)]
+          result[(freq+1):n] <- log(sd)
+        }
+        result
+        
+      } else if (code == 6) {
+        if (n > freq+1) {
+          sd <- x[(freq+1):n] - x[1:(n-freq)]
+          result[(freq+2):n] <- diff(sd)
+        }
+        result
+        
+      } else if (code == 7) {
+        if (n > freq+1) {
+          lx <- log(x)
+          ld <- diff(lx)
+          result[(freq+2):n] <- ld[(freq+1):(n-1)] - ld[1:(n-freq-1)]
+        }
+        result
+        
+      } else if (code == 8) {
+        # Identify non-NA segment
+        first_non_na <- min(which(!is.na(x)))
+        last_non_na  <- max(which(!is.na(x)))
+        
+        x_seg <- x[first_non_na:last_non_na]
+        t_seg <- seq_len(length(x_seg))
+        
+        # Detrend only this segment
+        detr <- residuals(lm(x_seg ~ t_seg))
+        
+        # Place back into full result vector
+        result <- rep(NA, n)
+        result[first_non_na:last_non_na] <- detr
+        
+        result
+        
+      } else {
+        stop("Unknown code.")
+      }
+      
+    }, error = function(e) {
+      warning(paste("Failed", varname, ":", e$message))
+      rep(NA, n)
+    })
+    
+    # FORCE LENGTH TO MATCH
+    if (length(transformed) != n) {
+      tmp <- rep(NA, n)
+      tmp[1:length(transformed)] <- transformed
+      transformed <- tmp
+    }
+    
+    # assign safely
+    out_df[[varname]] <- transformed
+    
+    info_list[[varname]] <- data.frame(
+      variable = varname,
+      code = code,
+      transformation = c(
+        "none","log","diff","logdiff",
+        "seasonal_diff","log_seasonal_diff",
+        "diff_seasonal_diff","logdiff_seasonal_diff",
+        "detrend"
+      )[code + 1],
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  return(list(
+    data = out_df,
+    info = dplyr::bind_rows(info_list)
+  ))
+}
+
+
+```
+
+#### Apply
+
+print the suggested transformation we stored earlier
+
+```{r}
+trans_09
+```
+
+Transformations codes:
+
+0.  None
+1.  log(x)
+2.  diff(x)
+3.  logdiff = diff(log(x))
+4.  seasonal diff (x - lag12(x))
+5.  log(seasonal diff)
+6.  diff(seasonal diff)
+7.  logdiff + seasonal diff
+8.  detrend (remove linear trend)
+
+in the chunks bellow results from transformation are saved into "out" then written to "blocks_transformed" and meta data is save to "transformation_info"
+
+```{r}
+block <- blocks_sa$FX_liqudity # choose your block
+codes <- c(3,3,3) # transformations vector
+```
+
+```{r}
+out <- transform_block(block, codes)
+
+blocks_transformed$FX_liqudity <- out$data # adjust to your block
+transformation_info$FX_liqudity <- out$info # adjust to your block
+
+```
+
+test for the results of the transformations, I save it to a corresponding "trans_nn_test" and plotting as needed.
+
+```{r}
+block <- blocks_transformed$FX_liqudity # choose the same block
+trans_09_test <- sapply(block %>% dplyr::select(-Date), test_transform) # choose number
+```
+
+```{r}
+plot.ts(blocks_transformed$FX_liqudity$`Foreign exchange reserves (millions of dollars)`)
+```
+
+### Save results
+
+```{r}
+save_transformation_info <- function(info_list, file_path = "transformation_info.xlsx") {
+  # info_list: a named list where each element is a data.frame of metadata
+  # file_path: output Excel file
+  
+  if (!requireNamespace("openxlsx", quietly = TRUE)) {
+    stop("Package 'openxlsx' is required but not installed.")
+  }
+  
+  # Create workbook
+  wb <- openxlsx::createWorkbook()
+  
+  # Loop through list elements
+  for (block_name in names(info_list)) {
+    
+    # Add worksheet with the block name
+    openxlsx::addWorksheet(wb, block_name)
+    
+    # Write the info table
+    openxlsx::writeData(wb, 
+                        sheet = block_name, 
+                        x = info_list[[block_name]])
+  }
+  
+  # Save file
+  openxlsx::saveWorkbook(wb, file = file_path, overwrite = TRUE)
+  
+  message("Saved: ", file_path)
+}
+
+```
+
+```{r}
+save_transformation_info(transformation_info, "TRANSFORMATION_INFO.xlsx")
+
+```
+
+```{r}
+save_list_to_excel(blocks_transformed, "blocks_transformed.xlsx")
+```
+
+### Conclusions
+
+1.  Consider eliminating FX_liqudiy, moving "reer" and "reserves" to the "capital_markets" block
+2.  take a second look into: **FIXED ALL OF THESE RESULTS VISUALIZED**
+    1.  Block: "corporate_business_tax", Var: "Goods and services" (seasonal-diff) and "excess expenses" (detrend) - both might be non-stationary after transformations
+    2.  Block: "real_estate", Var: "Real estate purchase tax" (detrend)
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`Goods and services`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`excess expenses`)
+```
+
+```{r}
+plot.ts(blocks_transformed$real_estate$`Real estate purchase tax`)
+```
+
+```{r}
+plot.ts(blocks_transformed$FX_liqudity$`Foreign exchange reserves (millions of dollars)`)
+```
+
+Series to re-consider:
+
+```{r}
+plot.ts(blocks_transformed$personal_labor_income_taxes$`Total refunds from the Income Tax Department`)
+```
+
+```{r}
+plot.ts(blocks_transformed$personal_labor_income_taxes$`Capital Gains Tax Refunds`)
+```
+
+```{r}
+plot.ts(blocks_transformed$personal_labor_income_taxes$`Non-profit institution tax`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`Cancellation companies`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`tax differential companies`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`Cancellations Deductions`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`Bonds and dividends`)
+```
+
+```{r}
+plot.ts(blocks_transformed$corporate_business_tax$`Companies returns`)
+```
+
+```{r}
+plot.ts(blocks_transformed$import_trade_tax$`Total import taxes`)
+```
+
+```{r}
+plot.ts(blocks_transformed$real_estate$`praise tax returns`)
+```
+
+```{r}
+plot.ts(blocks_transformed$real_estate$`Apartments sold at an annual rate`)
+```
+
+```{r}
+plot.ts(blocks_transformed$FX_liqudity)
+```
+
+# Release Lags
+
+right after finishing the transformations, we should also address the release lags in our data.
+
+as it is right now, for each month, the corresponding data is sitting in the beginning of the month, for example tax collected during March 2012 is showing 03/01/2012 in our records, however in the time of nowcasting this data won't be available for us, since it is reported at the earliest by 04/01/2012.
+
+to simplify the adjustment I am using this set of rules:
+
+| Release Lag (from end of month) | Push             |
+|---------------------------------|------------------|
+| \<30                            | 1 month forward  |
+| \>30                            | 2 months forward |
+| \>60                            | 3 months forward |
+
+for example:\
+assuming tax data is released in a 15 days lag from EoM then instead of storing it 03/01/2012 it is now pushed forward and stored 04/01/2012.\
+index data released 50 after EoM and was stored 03/01/2012 is now 05/01/2012.\
+labor data released 64 days after EoM was stored 03/01/2012 is now 06/01/2012\
+
+### Create Function
+
+```{r}
+shift_by_vector <- function(df, vec) {
+  # df: data.frame where the first column is 'Date'
+  # vec: numeric vector of lags, matching columns 2..n of df
+  
+  # Sanity check
+  if (length(vec) != (ncol(df) - 1)) {
+    stop("Length of vec must match number of data columns (excluding Date).")
+  }
+  
+  df_shifted <- df
+  
+  # Prepare the report
+  report <- data.frame(
+    variable = colnames(df)[-1],
+    lag_applied = vec,
+    stringsAsFactors = FALSE
+  )
+  
+  # Apply shifts
+  for (i in seq_along(vec)) {
+    k <- vec[i]
+    var <- colnames(df)[i + 1]   # +1 to skip Date
+    
+    if (!is.numeric(df[[var]])) {
+      warning(paste("Column", var, "is not numeric — skipped."))
+      next
+    }
+    
+    if (k > 0) {
+      # Shift forward: NA at the top, drop the last k values
+      df_shifted[[var]] <- c(rep(NA, k), df[[var]][1:(nrow(df) - k)])
+    } else {
+      # k == 0: no change
+      df_shifted[[var]] <- df[[var]]
+    }
+  }
+  
+  return(list(
+    data = df_shifted,
+    report = report
+  ))
+}
+```
+
+### Apply
+
+initiate
+
+```{r}
+blocks_shifted <- blocks_transformed
+shift_report <- list()
+```
+
+run for each block
+
+```{r}
+block <- blocks_transformed$FX_liqudity # choose your block
+lags <- c(1,0,1) # rep(val, n)
+```
+
+```{r}
+out <- shift_by_vector(block, lags)
+
+blocks_shifted$FX_liqudity <- out$data
+shift_report$FX_liqudity <- out$report
+```
+
+### Save Results
+
+```{r}
+save_list_to_excel(blocks_shifted, "blocks_shifted.xlsx")
+```
+
+```{r}
+save_transformation_info(shift_report, "shift_report.xlsx")
+```
