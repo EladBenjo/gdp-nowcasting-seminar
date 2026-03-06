@@ -13,25 +13,38 @@ The core challenge: combining data that arrives at different frequencies, with m
 
 ---
 
-## Models
+## Architecture
 
-| Model | Description |
-|---|---|
-| **DFM** (Dynamic Factor Model) | Core nowcasting model; extracts latent factors from mixed-frequency indicators |
-| **ARIMA / SARIMA** | Univariate baseline and component forecasting |
-| **XGBoost / Random Forest** | ML benchmark for feature-based nowcasting |
+The pipeline combines two modeling stages:
+
+1. **DFM (Dynamic Factor Model)** — extracts latent factors from mixed-frequency indicators; used directly for multi-horizon forecasting (h=1,2,3)
+2. **DFM + XGBoost (Bridge Model)** — at h=0, DFM factors are used as regressors in XGBoost, compensating for DFM's weaker nowcasting performance at the current quarter
 
 ---
 
 ## Results
 
-> _Update with your actual numbers below_
+All metrics are reported as **ratio to Random Walk baseline** (lower = better). A value of 0.80 means the model achieves 80% of the baseline's error.
 
-| Model | RMSE | MAE | vs. Baseline |
+**DFM — Multi-Horizon Forecasting**
+
+| Horizon | RMSE / Baseline | MAE / Baseline | Directional Accuracy |
 |---|---|---|---|
-| DFM | — | — | — |
-| XGBoost | — | — | — |
-| ARIMA (baseline) | — | — | — |
+| h=1 | 0.336 | 0.407 | 0.67 |
+| h=2 | 0.265 | 0.280 | **0.93** |
+| h=3 | 0.818 | 0.783 | 0.67 |
+
+**Model Comparison at h=0 (Nowcasting)**
+
+| Model | RMSE / Baseline | MAE / Baseline |
+|---|---|---|
+| DFM | 0.965 | 1.002 |
+| Bridge (DFM → XGBoost) | **0.802** | **0.849** |
+
+Key takeaways:
+- DFM outperforms Random Walk significantly at h=1 and h=2
+- At h=0, the Bridge model (DFM factors as XGBoost regressors) is the strongest performer
+- Directional accuracy of 0.93 at h=2 is particularly strong for a policy-relevant signal
 
 ---
 
