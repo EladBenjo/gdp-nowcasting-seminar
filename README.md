@@ -1,6 +1,6 @@
 # GDP Nowcasting — Israeli Ministry of Finance
 
-Real-time quarterly GDP growth forecasting using mixed-frequency macroeconomic data.  
+Real-time quarterly GDP growth forecasting using mixed-frequency macroeconomic data.
 Developed in collaboration with the Chief Economist's office at the Israeli Ministry of Finance.
 
 ---
@@ -10,6 +10,8 @@ Developed in collaboration with the Chief Economist's office at the Israeli Mini
 GDP figures are published with a significant lag — policymakers need estimates *before* the official release. This project builds a nowcasting pipeline that ingests high-frequency indicators (monthly, weekly) and produces quarterly GDP growth estimates in real time.
 
 The core challenge: combining data that arrives at different frequencies, with missing values, under economic constraints — and doing it in a way that's actually useful to analysts.
+
+The pipeline is packaged as an **analyst-friendly Shiny web app** — no R knowledge required to use it.
 
 ---
 
@@ -48,13 +50,54 @@ Key takeaways:
 
 ---
 
+## Shiny App — Analyst Workflow
+
+The app guides analysts through 5 steps:
+
+| Step | Description |
+| ---- | ----------- |
+| **1 · Upload** | Upload any Excel or CSV file with indicators + target variable |
+| **2 · Frequency & Target** | Auto-detects column frequency (monthly/quarterly); analyst selects the target variable |
+| **3 · Transformations** | Runs ADF, KPSS, and STL tests; recommends transformations per variable; analyst can override before applying |
+| **4 · Model** | ICr and VARselect diagnostics guide factor/lag selection; runs rolling-window DFM with optional XGBoost bridge |
+| **5 · Results** | Interactive forecast plot, accuracy metrics by horizon, and Excel export |
+
+### Running locally
+
+```r
+# Install required packages (first time only)
+install.packages(c(
+  "shiny", "bslib", "DT", "ggplot2", "plotly", "dplyr",
+  "readxl", "openxlsx", "zoo", "xts", "lubridate",
+  "tseries", "forecast", "seasonal", "dfms", "vars", "xgboost"
+))
+
+# Launch the app
+shiny::runApp()
+```
+
+---
+
 ## Repository Structure
 
 ```
 gdp-nowcasting-seminar/
-├── Notebooks/          # Exploratory analysis and model development
-├── R/                  # R-based econometric models (DFM, ARIMA)
-├── src/                # Python utilities and pipeline components
+├── app.R                       # Shiny entry point — run this
+├── R/
+│   ├── core/                   # Pure R functions (no Shiny dependency)
+│   │   ├── config.R            # All paths and model parameters
+│   │   ├── utils/io.R          # Excel read/write helpers
+│   │   ├── transformations/    # Price adjustment, X-13 SA, stationarity, release lags
+│   │   └── modeling/           # DFM, XGBoost bridge, evaluation metrics
+│   ├── shiny/
+│   │   ├── ui.R                # App layout
+│   │   ├── server.R            # Reactive data flow
+│   │   └── modules/            # One module per workflow step
+│   ├── DFM.qmd                 # Original DFM notebook (reference)
+│   └── transformations.qmd     # Original transformations notebook (reference)
+├── legacy/                     # Archived Python code (not active)
+│   ├── Notebooks/
+│   └── src/
 ├── nowcasting_GDP_Q_by_Elad_Benjo.pdf  # Full project report
 └── README.md
 ```
@@ -64,9 +107,10 @@ gdp-nowcasting-seminar/
 ## Data
 
 Mixed-frequency Israeli macroeconomic indicators including:
-- Monthly industrial production, trade, and employment data
+
+- Monthly tax revenues, industrial production, trade, and employment data
 - Quarterly national accounts (CBS Israel)
-- Additional high-frequency proxies
+- FX rates, capital markets, and real estate indicators
 
 > Data sourced from public Israeli government databases. Not included in repo due to licensing.
 
@@ -74,13 +118,10 @@ Mixed-frequency Israeli macroeconomic indicators including:
 
 ## Tech Stack
 
-![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)
 ![R](https://img.shields.io/badge/R-276DC3?style=flat&logo=r&logoColor=white)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=flat&logo=scikit-learn&logoColor=white)
-![pandas](https://img.shields.io/badge/pandas-150458?style=flat&logo=pandas&logoColor=white)
+![Shiny](https://img.shields.io/badge/Shiny-blue?style=flat&logo=rstudio&logoColor=white)
 
-**Python:** pandas, scikit-learn, statsmodels, XGBoost  
-**R:** dynfactoR / nowcasting package (DFM)
+**R packages:** `dfms`, `xgboost`, `seasonal` (X-13), `vars`, `tseries`, `shiny`, `bslib`, `plotly`
 
 ---
 
