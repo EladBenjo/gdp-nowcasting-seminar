@@ -95,9 +95,6 @@ gdp-nowcasting-seminar/
 │   │   └── modules/            # One module per workflow step
 │   ├── DFM.qmd                 # Original DFM notebook (reference)
 │   └── transformations.qmd     # Original transformations notebook (reference)
-├── legacy/                     # Archived Python code (not active)
-│   ├── Notebooks/
-│   └── src/
 ├── nowcasting_GDP_Q_by_Elad_Benjo.pdf  # Full project report
 └── README.md
 ```
